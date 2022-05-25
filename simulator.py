@@ -7,16 +7,6 @@ PI2 = pi / 2
 width=1000
 height=700
 
-pitch=0
-roll=0
-yaw=0
-throttle=50
-
-dpitch=0
-dyaw=0
-droll=0
-dthrottle=0
-
 MAX_THROTTLE = 100
 MIN_THROTTLE = 0
 
@@ -28,61 +18,6 @@ ortho = (1.0 /sqrt(6)) * np.matrix([[sqrt(3),0,-sqrt(3)],
 
 def CLAMP(x,lower,upper):
     return min(upper,max(x,lower))
-
-def mouse_orient(e):
-   x = e.x
-   y = e.y
-   #print("Pointer is currently at %d, %d" % (x,y))
-
-'''
-    keybinds:
-    
-    a-d: roll  aft-starboard
-    w-s: pitch up-down
-
-    j-l: yaw   left-right
-    i-k: throttle up-down
-'''
-
-def keydown(e):
-    global dpitch, dyaw, droll, dthrottle
-    
-    if e.char == 'a':
-        droll = -1
-    elif e.char == 'd': 
-        droll = 1
-    elif e.char == 's':
-        dpitch = -1
-    elif e.char == 'w':
-        dpitch = 1
-    elif e.char == 'j':
-        dyaw = -1
-    elif e.char == 'l':
-        dyaw = 1
-    elif e.char == 'k':
-        dthrottle = -1
-    elif e.char == 'i':
-        dthrottle = 1
-
-def keyup(e):
-    global dpitch, dyaw, droll, dthrottle
-    
-    if e.char == 'a' and droll == -1:
-        droll = 0
-    elif e.char == 'd' and droll == 1: 
-        droll = 0
-    elif e.char == 's' and dpitch == -1:
-        dpitch = 0
-    elif e.char == 'w' and dpitch == 1:
-        dpitch = 0
-    elif e.char == 'j' and dyaw == -1:
-        dyaw = 0
-    elif e.char == 'l' and dyaw == 1:
-        dyaw = 0
-    elif e.char == 'k' and dthrottle == -1:
-        dthrottle = 0
-    elif e.char == 'i' and dthrottle == 1:
-        dthrottle = 0
 
 def to_ss(vec3):
     ss = (ortho * np.reshape(vec3,(-1,1)))[:2]
@@ -123,58 +58,37 @@ def normalize(v):
     return v / norm
 
 def reset_globals():
-    global centroid, offs, pitch, roll, yaw, throttle
+    global centroid, offs
     centroid = np.array([[0.5,1.0,0.5]])
-    pitch=0
-    roll=0
-    yaw=0
-    throttle=50
+    jet.pitch=0
+    jet.roll=0
+    jet.yaw=0
+    jet.throttle=50
     offs = deepcopy(offs_b)
     
     
     for i in range(len(offs)): #rotate about initial configuration
         offs[i] = scale(offs[i],list(centroid[0]),0.5)
-        offs[i] = rotate_about(offs[i],centroid,pitch,yaw,roll)
+        offs[i] = rotate_about(offs[i],centroid,jet.pitch,jet.yaw,jet.roll)
     
 def scale(a, b, s):
     diff = [(aa - bb) * s for aa, bb in zip(a,b)] 
     return [bb + ddiff for bb, ddiff in zip(b, diff)]
 
 def draw_loop():
-    global pitch, yaw, roll, throttle
+    global jet
     
-    pitch = (pitch + dpitch) % 360
-    yaw   = (yaw   + dyaw)   % 360
-    roll  = (roll  + droll)  % 360
-    throttle = CLAMP(throttle + dthrottle, 0, 100)
+    jet.pitch = (jet.pitch + jet.dpitch) % 360
+    jet.yaw   = (jet.yaw   + jet.dyaw)   % 360
+    jet.roll  = (jet.roll  + jet.droll)  % 360
+    jet.throttle = CLAMP(jet.throttle + jet.dthrottle, 0, 100)
     
     #print(pitch,yaw,roll,throttle)
-    
-    #let us draw the 'grid' guide:
-    grid_points = [[0,0,0],[1,0,0],[0,1,0],[1,1,0],
-                   [0,0,1],[1,0,1],[0,1,1],[1,1,1]]
-    grid_points = [to_ss(point) for point in grid_points]
 
-    canv.coords(floor,grid_points[0]+grid_points[1]+grid_points[5]+grid_points[4])
-
-    
-    global old
-    cur = (old + 1) % 8
-    canv.itemconfig(text,text=str(cur))
-    canv.itemconfig(grid_dots[old],fill='white')
-    canv.itemconfig(grid_dots[cur],fill='red')
-    old = cur
-    
-
-    #bounds
-    for dot, point in zip(grid_dots, grid_points):
-        canv.coords(dot, point[0], point[1], point[0] + 5, point[1] + 5)
-       
-       
     #move in worldspace
     global centroid
     direc = normalize(np.array(offs[3]) - centroid)
-    centroid += direc * 0.0001 * CLAMP(throttle - 50,0,inf)
+    centroid += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
     #print(type(centroid))
     
     #bounds
@@ -199,12 +113,12 @@ def draw_loop():
         reset_globals()
 
     for i in range(len(offs)):
-        offs[i] += direc * 0.0001 * CLAMP(throttle - 50,0,inf)
+        offs[i] += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
 
     #maybe use this?
     depth_factor = sqrt((centroid[0][0] * centroid[0][0]) + 
                         (centroid[0][2] * centroid[0][2]) )
-    print(centroid, throttle, depth_factor)
+    print(centroid, jet.throttle, depth_factor)
        
     #plane center, don't rotate
     ss2 = to_ss(centroid)
@@ -213,7 +127,7 @@ def draw_loop():
     for idx, (off_dot, off) in enumerate(zip(off_dots, offs)):
         off2 = (np.array(off - centroid))
         
-        ss = rotate_about(off,centroid,dpitch,dyaw,droll)
+        ss = rotate_about(off,centroid,jet.dpitch,jet.dyaw,jet.droll)
         offs[idx] = ss
         ss = to_ss(ss)
         
@@ -226,6 +140,67 @@ def draw_loop():
     canv.coords(plane_lines[5],to_ss(offs[0])+to_ss(offs[4]))
     canv.after(10,draw_loop)
 
+class Jet:
+    
+    def keydown_gen(self,keys):
+        def keydown(e):
+            nonlocal self
+        
+            if e.char == keys[0]:
+                self.droll = -1
+            elif e.char == keys[1]: 
+                self.droll = 1
+            elif e.char == keys[2]:
+                self.dpitch = -1
+            elif e.char == keys[3]:
+                self.dpitch = 1
+            elif e.char == keys[4]:
+                self.dyaw = -1
+            elif e.char == keys[5]:
+                self.dyaw = 1
+            elif e.char == keys[6]:
+                self.dthrottle = -1
+            elif e.char == keys[7]:
+                self.dthrottle = 1
+        return keydown
+
+    def keyup_gen(self,keys):
+        def keyup(e):
+            nonlocal self 
+            
+            if e.char == keys[0] and self.droll == -1:
+                self.droll = 0
+            elif e.char == keys[1] and self.droll == 1: 
+                self.droll = 0
+            elif e.char == keys[2] and self.dpitch == -1:
+                self.dpitch = 0
+            elif e.char == keys[3] and self.dpitch == 1:
+                self.dpitch = 0
+            elif e.char == keys[4] and self.dyaw == -1:
+                self.dyaw = 0
+            elif e.char == keys[5] and self.dyaw == 1:
+                self.dyaw = 0
+            elif e.char == keys[6] and self.dthrottle == -1:
+                self.dthrottle = 0
+            elif e.char == keys[7] and self.dthrottle == 1:
+                self.dthrottle = 0
+        return keyup 
+
+    
+
+    def __init__(self, root, canv, keys):
+        root.bind("<KeyPress>",   self.keydown_gen(keys))
+        root.bind("<KeyRelease>", self.keyup_gen(keys))
+        self.pitch=0
+        self.roll=0
+        self.yaw=0
+        self.throttle=50
+
+        self.dpitch=0
+        self.dyaw=0
+        self.droll=0
+        self.dthrottle=0
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.geometry('%dx%d' % (width,height) )
@@ -233,15 +208,15 @@ if __name__ == "__main__":
     root.resizable(False,False)
     
     canv = tk.Canvas(root, height=height, width=width, bg='black')
-    root.bind('<Motion>',mouse_orient)
-    root.bind("<KeyPress>", keydown)
-    root.bind("<KeyRelease>", keyup)
+    keys = ['a','d','s','w','j','l','k','i']
+    jet = Jet(root,canv,keys)
     canv.grid()
 
-    grid_dots = [canv.create_oval(0,0,0,0,fill='white') for j in range(8)]
-
-    floor = canv.create_polygon(0,0,0,0,0,0,0,0,fill='green')
-    text = canv.create_text(200,200,text='h',fill='white')
+    grid_points = [[0,0,0],[1,0,0],[1,0,1],[0,0,1]]
+    grid_points = [to_ss(point) for point in grid_points]
+    floor = canv.create_polygon(
+        grid_points[0]+grid_points[1]+grid_points[2]+grid_points[3],
+    fill='green')
 
     centroid = [0.5,1.0,0.5]
     centroid_dot = canv.create_oval(0,0,0,0,fill='red')
@@ -259,7 +234,7 @@ if __name__ == "__main__":
     
     for i in range(len(offs)): #rotate about initial configuration
         offs[i] = scale(offs[i],centroid,0.5)
-        offs[i] = rotate_about(offs[i],centroid,pitch,yaw,roll)
+        offs[i] = rotate_about(offs[i],centroid,jet.pitch,jet.yaw,jet.roll)
     
     off_dots = [
         canv.create_oval(0,0,0,0,fill='blue'),
