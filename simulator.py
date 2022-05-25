@@ -2,15 +2,12 @@ import tkinter as tk
 import numpy as np
 from math import radians, cos, sin, asin, pi, exp, sqrt, inf
 from copy import deepcopy
-PI2 = pi / 2
 
 width=1000
 height=700
 
 MAX_THROTTLE = 100
 MIN_THROTTLE = 0
-
-old = -1
 
 ortho = (1.0 /sqrt(6)) * np.matrix([[sqrt(3),0,-sqrt(3)],
                                    [1,2,1],
@@ -57,87 +54,14 @@ def normalize(v):
        return v
     return v / norm
 
-def reset_globals():
-    global centroid, offs
-    centroid = np.array([[0.5,1.0,0.5]])
-    jet.pitch=0
-    jet.roll=0
-    jet.yaw=0
-    jet.throttle=50
-    offs = deepcopy(offs_b)
-    
-    
-    for i in range(len(offs)): #rotate about initial configuration
-        offs[i] = scale(offs[i],list(centroid[0]),0.5)
-        offs[i] = rotate_about(offs[i],centroid,jet.pitch,jet.yaw,jet.roll)
-    
 def scale(a, b, s):
     diff = [(aa - bb) * s for aa, bb in zip(a,b)] 
     return [bb + ddiff for bb, ddiff in zip(b, diff)]
 
 def draw_loop():
-    global jet
-    
-    jet.pitch = (jet.pitch + jet.dpitch) % 360
-    jet.yaw   = (jet.yaw   + jet.dyaw)   % 360
-    jet.roll  = (jet.roll  + jet.droll)  % 360
-    jet.throttle = CLAMP(jet.throttle + jet.dthrottle, 0, 100)
-    
-    #print(pitch,yaw,roll,throttle)
-
-    #move in worldspace
-    global centroid
-    direc = normalize(np.array(offs[3]) - centroid)
-    centroid += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
-    #print(type(centroid))
-    
-    #bounds
-    #hit a wall?
-    if centroid[0][0] < -0.5:
-        print("Hit -X")
-        reset_globals()
-    elif centroid[0][0] > 1.0:
-        print("Hit +X")
-        reset_globals()
-    elif centroid[0][1] < 0.0:
-        print("Hit -Y")
-        reset_globals()
-    elif centroid[0][1] > sqrt(2):
-        print("Hit +Y")
-        reset_globals()
-    elif centroid[0][2] < -0.5:
-        print("Hit -Z")
-        reset_globals()
-    elif centroid[0][2] > 1.0:
-        print("Hit +Z")
-        reset_globals()
-
-    for i in range(len(offs)):
-        offs[i] += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
-
-    #maybe use this?
-    depth_factor = sqrt((centroid[0][0] * centroid[0][0]) + 
-                        (centroid[0][2] * centroid[0][2]) )
-    print(centroid, jet.throttle, depth_factor)
-       
-    #plane center, don't rotate
-    ss2 = to_ss(centroid)
-    canv.coords(centroid_dot,ss2[0]-5,ss2[1]-5,ss2[0]+5,ss2[1]+5)
-       
-    for idx, (off_dot, off) in enumerate(zip(off_dots, offs)):
-        off2 = (np.array(off - centroid))
-        
-        ss = rotate_about(off,centroid,jet.dpitch,jet.dyaw,jet.droll)
-        offs[idx] = ss
-        ss = to_ss(ss)
-        
-        #line to plane center
-        canv.coords(plane_lines[idx], ss2+ss)
-        
-        canv.coords(off_dot,ss[0]-5,ss[1]-5,
-                            ss[0]+5,ss[1]+5)
-    
-    canv.coords(plane_lines[5],to_ss(offs[0])+to_ss(offs[4]))
+    jet.position_step_integration()
+    jet.check_bounds()
+    jet.graphical_step_iteration()
     canv.after(10,draw_loop)
 
 class Jet:
@@ -186,11 +110,83 @@ class Jet:
                 self.dthrottle = 0
         return keyup 
 
-    
+    def check_bounds(self):
+        #hit a wall?
+        if self.centroid[0][0] < -0.5:
+            print("Hit -X")
+            self.reset()
+        elif self.centroid[0][0] > 1.0:
+            print("Hit +X")
+            self.reset()
+        elif self.centroid[0][1] < 0.0:
+            print("Hit -Y")
+            self.reset()
+        elif self.centroid[0][1] > sqrt(2):
+            print("Hit +Y")
+            self.reset()
+        elif self.centroid[0][2] < -0.5:
+            print("Hit -Z")
+            self.reset()
+        elif self.centroid[0][2] > 1.0:
+            print("Hit +Z")
+            self.reset()
 
-    def __init__(self, root, canv, keys):
-        root.bind("<KeyPress>",   self.keydown_gen(keys))
-        root.bind("<KeyRelease>", self.keyup_gen(keys))
+    def reset(self):
+        self.centroid = np.array([deepcopy(self.centroid_b)])
+        self.pitch=0
+        self.roll=0
+        self.yaw=0
+        self.throttle=50
+        
+        self.offs = deepcopy(offs_b)
+
+        for i in range(len(self.offs)): #rotate about initial configuration
+            self.offs[i] = scale(self.offs[i],list(self.centroid[0]),self.scale_factor)
+            self.offs[i] = rotate_about(self.offs[i],self.centroid,self.pitch,self.yaw,self.roll)
+
+    def position_step_integration(self):
+        #adjust orientation
+        self.pitch = (self.pitch + self.dpitch) % 360
+        self.yaw   = (self.yaw   + self.dyaw)   % 360
+        self.roll  = (self.roll  + self.droll)  % 360
+        self.throttle = CLAMP(self.throttle + self.dthrottle, 0, 100)
+        
+        #move center in worldspace
+        direc = normalize(np.array(self.offs[3]) - self.centroid)
+        jet.centroid += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
+        
+        #move surrounding jet 'points' in worldspace
+        
+        for i in range(len(self.offs)):
+            self.offs[i] += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
+            self.offs[i] = rotate_about(self.offs[i],self.centroid,self.dpitch,self.dyaw,self.droll)
+
+    def graphical_step_iteration(self):
+        ss2 = to_ss(jet.centroid)
+        
+        if self.display_dots:
+            self.canv.coords(self.centroid_dot,ss2[0]-5,ss2[1]-5,ss2[0]+5,ss2[1]+5)
+        else:
+            self.canv.coords(self.centroid_dot,0,0,0,0)
+       
+        for idx, (off_dot, off) in enumerate(zip(self.off_dots, self.offs)):
+            ss = to_ss(off)
+            self.canv.coords(self.plane_lines[idx], ss2+ss)
+            
+            if self.display_dots:
+                canv.coords(off_dot,ss[0]-5,ss[1]-5,ss[0]+5,ss[1]+5)
+            else:
+                self.canv.coords(off_dot,0,0,0,0)
+    
+        self.canv.coords(self.plane_lines[5],to_ss(self.offs[0])+to_ss(self.offs[4])) #tailfin to centroid
+
+    def __init__(self, root, canv, keys, centroid_b, offs_b,scale_factor=0.5,display_dots=True):
+        
+        self.root=root
+        self.canv=canv
+        
+        self.root.bind("<KeyPress>",   self.keydown_gen(keys))
+        self.root.bind("<KeyRelease>", self.keyup_gen(keys))
         self.pitch=0
         self.roll=0
         self.yaw=0
@@ -200,7 +196,37 @@ class Jet:
         self.dyaw=0
         self.droll=0
         self.dthrottle=0
+        
+        self.centroid_b = centroid_b
+        self.centroid = deepcopy(self.centroid_b)
+        self.offs_b = offs_b
+        self.offs = deepcopy(self.offs_b)
+        
+        self.scale_factor=scale_factor
 
+        for i in range(len(self.offs)): #rotate about initial configuration
+            self.offs[i] = scale(self.offs[i],self.centroid,self.scale_factor)
+            self.offs[i] = rotate_about(self.offs[i],self.centroid,self.pitch,self.yaw,self.roll)
+            
+        self.centroid_dot = canv.create_oval(0,0,0,0,fill='red') #what we 'really' care about
+        
+        self.display_dots=display_dots
+        self.off_dots = [ #minimum for unique orientation in 3doF
+            canv.create_oval(0,0,0,0,fill='blue'),
+            canv.create_oval(0,0,0,0,fill='yellow'),
+            canv.create_oval(0,0,0,0,fill='orange'),
+            canv.create_oval(0,0,0,0,fill='pink'),
+            canv.create_oval(0,0,0,0,fill='purple'),
+        ]
+        self.plane_lines = [ #connect the dots together to look pretty
+            canv.create_line(0,0,0,0,fill='white'),
+            canv.create_line(0,0,0,0,fill='white'),
+            canv.create_line(0,0,0,0,fill='white'),
+            canv.create_line(0,0,0,0,fill='white'),
+            canv.create_line(0,0,0,0,fill='white'),
+            canv.create_line(0,0,0,0,fill='white')
+        ]
+    
 if __name__ == "__main__":
     root = tk.Tk()
     root.geometry('%dx%d' % (width,height) )
@@ -208,50 +234,28 @@ if __name__ == "__main__":
     root.resizable(False,False)
     
     canv = tk.Canvas(root, height=height, width=width, bg='black')
-    keys = ['a','d','s','w','j','l','k','i']
-    jet = Jet(root,canv,keys)
-    canv.grid()
-
+    
+    #make floor before anything, so don't have to retag it lower
     grid_points = [[0,0,0],[1,0,0],[1,0,1],[0,0,1]]
     grid_points = [to_ss(point) for point in grid_points]
     floor = canv.create_polygon(
         grid_points[0]+grid_points[1]+grid_points[2]+grid_points[3],
     fill='green')
-
-    centroid = [0.5,1.0,0.5]
-    centroid_dot = canv.create_oval(0,0,0,0,fill='red')
     
+    keys = ['a','d','s','w','j','l','k','i']
+    centroid_b = [0.5,1.0,0.5]
     offs_b = [
         [0.5,1.0,0.7], #main points
         [0.6,1.0,0.5],
         [0.4,1.0,0.5],
         [0.5,1.0,0.2],
-        
         [0.5,1.1,0.7]
     ]
+    jet = Jet(root,canv,keys,centroid_b, offs_b, scale_factor=0.4, display_dots=True)
+    canv.grid()
+
     
-    offs = deepcopy(offs_b)
-    
-    for i in range(len(offs)): #rotate about initial configuration
-        offs[i] = scale(offs[i],centroid,0.5)
-        offs[i] = rotate_about(offs[i],centroid,jet.pitch,jet.yaw,jet.roll)
-    
-    off_dots = [
-        canv.create_oval(0,0,0,0,fill='blue'),
-        canv.create_oval(0,0,0,0,fill='yellow'),
-        canv.create_oval(0,0,0,0,fill='orange'),
-        canv.create_oval(0,0,0,0,fill='pink'),
-        canv.create_oval(0,0,0,0,fill='purple'),
-    ]
-    plane_lines = [
-        canv.create_line(0,0,0,0,fill='white'),
-        canv.create_line(0,0,0,0,fill='white'),
-        canv.create_line(0,0,0,0,fill='white'),
-        canv.create_line(0,0,0,0,fill='white'),
-        canv.create_line(0,0,0,0,fill='white'),
-        canv.create_line(0,0,0,0,fill='white')
-    ]
-    
+
 
     draw_loop()
     root.mainloop()
