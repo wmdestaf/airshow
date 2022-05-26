@@ -3,12 +3,16 @@ import numpy as np
 from math import degrees, radians, cos, acos, sin, asin, pi, exp, sqrt, inf
 from copy import deepcopy
 from time import time
+import torch
+from random import randint, random
 
 width=1000
 height=700
 
 MAX_THROTTLE = 100
 MIN_THROTTLE = 0
+
+GAMMA=0.999 #we are invested in the future
 
 ortho = (1.0 /sqrt(6)) * np.matrix([[sqrt(3),0,-sqrt(3)],
                                    [1,2,1],
@@ -59,18 +63,81 @@ def scale(a, b, s):
     diff = [(aa - bb) * s for aa, bb in zip(a,b)] 
     return [bb + ddiff for bb, ddiff in zip(b, diff)]
 
+MAX_STEPS=6000 #60 seconds with delay
+
 def draw_loop():
-    global all_jets, all_models
+    global all_jets, all_models, cur_step, halt_sema
     
-    for jet , model in zip(all_jets, all_models):
+    if not halt_sema:
+        print("TRAINING - PLEASE WAIT")
+        canv.after(10,draw_loop)
+        return
+        
+    
+    #movememt
+    for jet, memory, model in zip(all_jets, all_memory, all_models):
         #TODO: fire model and move jet with output
         
+        #decide what the hell we're doing
+        with torch.no_grad():
+            raw = state_to_future_array_from_jet(jet)
+            data = torch.FloatTensor(raw)
+            memory.append(data)
+            
+            #make decision
+            out = model(data)
+            
+            choice = -1
+            if random() > 0.05:  #likely, make best one (max)
+                max_ = -inf
+                maxi = -1
+                
+                for idx, i in enumerate(out):
+                    if max_ < i:
+                        max_ = i
+                        maxi = idx
+                
+                choice = maxi
+            else:
+                choice = randint(0,31)
+
+            #HAHAHAHAHAHA
+            decisions = [activate(not not 0x1 & (choice >> (i))) for i in range(5)]
+            jet.auto_input(decisions)
+            #print(decisions)
+        
+     
+    #time step
+    empty = True
+    for i, jet in enumerate(all_jets):
         jet.position_step_integration()
         jet.check_bounds()
         jet.graphical_step_iteration()
+        im_empty = True
+        for missile in jet.missiles:
+            if missile and missile.detonated != 1:
+                empty = False
+            if missile and missile.flying != 1 and missile.detonated != 1:
+                im_empty = False
         
-    state_to_future_array_from_jet(all_jets[0])
+       # print(im_empty)
+        
+        global held        
+        if im_empty and held[i] == MAX_STEPS: 
+           # print("gortcha")
+            held[i] = cur_step
+        
+  #  print(held)
+        
+    if empty or cur_step == MAX_STEPS:
+        reset_simulator(None,None)
+        
+        
+    cur_step += 1
     canv.after(10,draw_loop)
+
+def activate(_Bool):
+    return -1 if not _Bool else 1
 
 def sign(x):
     return -1 if x < 0 else 1
@@ -81,9 +148,10 @@ class Missile:
         self.detonated = 0
         self.jet = jet
         self.other_jets = other_jets
-        self.radius = 0.1
+        self.radius = 0.15
         self.dot = canv.create_oval(0,0,0,0,outline='yellow')
         self.speed = speed
+        self.centroid=deepcopy(self.jet.centroid)
     
     def launch(self):
         self.flying = 1
@@ -143,9 +211,17 @@ class Missile:
                 reset_simulator(self.jet,jet)
 
 def reset_simulator(winner, failer):
-    global all_jets
+    global all_jets, cur_step
+    global halt_sema #gil makes this trivially simple
     
-    res_net = [0 for _ in range(len(all_jets))]
+    halt_sema = 0
+    
+    cur_step = 0
+    
+    if winner or failer:
+        res_net = [0.0001 for _ in range(len(all_jets))]
+    else:
+        res_net = [-0.5 for _ in range(len(all_jets))]
     
     for idx, jet in enumerate(all_jets):
         jet.reset()
@@ -160,29 +236,111 @@ def reset_simulator(winner, failer):
             all_jets.index(winner))) #expand to N jets, refactor this
             res_net[idx] = -2
 
+    for i in range(len(res_net)): #stayed alive, gain some points
+        global held
+        len_held = held[i]
+        if res_net[i] < 0:
+            res_net[i] /= len_held
+        else:
+            res_net[i] *= len_held
     print(res_net)
 
+    #return
+
     global all_models
-    for jet, model in zip(all_jets, all_models):
-        #todo: apply reward to models
-        pass
+    for jet, memory, model, rw, optimizer in zip(all_jets, all_memory, all_models, res_net, all_opts):
+        
+        inputs = memory
+        outputs = [rw * pow(GAMMA,i) for i in range(len(inputs))]
+        outputs.reverse()
+        
+        for epoch in range(3):
+            for input_, output_ in zip(inputs, outputs):
+                #training passes
+                optimizer.zero_grad()
+                
+                #at such a point, what does the model say?
+                model_res = max(model(input_))
+                #at such a point, what is the discounted reward we got?
+                disc__res = torch.FloatTensor([output_])
+                
+                #print(model_res, disc__res)
+                
+                loss = criterion(model_res, disc__res)
+                loss.backward()
+                optimizer.step()
+        
+    for memory in all_memory:
+        memory.clear()
+        
+    held = [MAX_STEPS for _ in range(len(all_jets))]
+        
+    halt_sema = 1
 
 TIME_STEP = 0.001
 SCALE_CS  = 0.5
 N_MISSILES = 4
 
-#input data
-#for every jet: 4 orientation, 
+#input layer
+#for every jet: 4 orientation, (p,y,r,t), 3 centroid (x,y,z), N_MISSILES missiles 
+#for every missile: 1 flying, 1 detonated 3 centroid (x,y,z)
+#
+#total inputs: N_JETS * ( (4 + 3) + ((1 + 1 + 3) * N_MISSILES))
+#              N_JETS * ( 7 + 5 * N_MISSILES)
+#              7*N_JETS + 5 * N_JETS * N_MISSILES
+#
+#output layer
+#
+#5 outputs (dPitch, dYaw, dRoll, dThrottle, fire) @ 2 options each = 10 outputs
+#2^5 = 32 outputs. LSB=fire / not fire, 2LSB=incease / decrease thrust, etc...
+#
+#
+#in our case, N_JETS=2, N_MISSILES=4. So, go from 54 inputs to 32 outputs. How should we do so?
+#
+#Let's make 9 layers.
+#54->54->54->43->43->43->32->32->32
+#
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(54,54)
+        self.fc2 = nn.Linear(54,54)
+        self.fc3 = nn.Linear(54,43)
+        self.fc4 = nn.Linear(43,43)
+        self.fc5 = nn.Linear(43,43)
+        self.fc6 = nn.Linear(43,32)
+        self.fc7 = nn.Linear(32,32)
+        self.fc8 = nn.Linear(32,32)
+        self.fc9 = nn.Linear(32,32)
+
+    def forward(self, x):
+        x = F.gelu(self.fc1(x))
+        x = F.gelu(self.fc2(x))
+        x = F.gelu(self.fc3(x))
+        x = F.gelu(self.fc4(x))
+        x = F.relu(self.fc5(x)) #just for funsies
+        x = F.gelu(self.fc6(x))
+        x = F.gelu(self.fc7(x))
+        x = F.gelu(self.fc8(x))
+        x = self.fc9(x)
+        return x
+
 
 def state_to_future_array_from_jet(jet):
     global all_jets
-
     #first, spit out our orientation, and throttle
+    
+    ajc = jet.centroid
+    if len(ajc) == 1:
+        ajc = ajc[0]
 
     feature = [
-        np.asarray(jet.centroid)[0][0],
-        np.asarray(jet.centroid)[0][1],
-        np.asarray(jet.centroid)[0][2],
+        ajc[0],
+        ajc[1],
+        ajc[2],
         jet.pitch, jet.yaw, jet.roll, jet.throttle
     ]
 
@@ -190,7 +348,11 @@ def state_to_future_array_from_jet(jet):
     missile_info = []
     for missile in jet.missiles:
         if missile:
-            missile_info += (list(np.asarray(missile.centroid)[0]))
+            ajmc = missile.centroid
+            if len(ajmc) == 1: #WTF
+                ajmc = ajmc[0]
+                ajmc = ajmc.tolist()
+            missile_info += ajmc
             missile_info += [missile.flying,missile.detonated]
     feature += missile_info
     
@@ -198,32 +360,44 @@ def state_to_future_array_from_jet(jet):
     for jet2 in all_jets:
         if jet2 == jet:
             continue
+
+        aj2c = jet2.centroid
+        if len(aj2c) == 1:
+            aj2c = aj2c[0]
+        
         feature += [
-            np.asarray(jet2.centroid)[0][0],
-            np.asarray(jet2.centroid)[0][1],
-            np.asarray(jet2.centroid)[0][2],
+            aj2c[0],
+            aj2c[1],
+            aj2c[2],
             jet2.pitch, jet2.yaw, jet2.roll,jet2.throttle
         ]
 
         for missile in jet2.missiles:
-            missile_info = deepcopy([])
+            missile_info = deepcopy([]) #losing my mind
             if missile:
-                missile_info += np.asarray(missile.centroid)[0].tolist()
+                ajmc = missile.centroid
+                if len(ajmc) == 1: #WTF
+                    ajmc = ajmc[0]
+                    ajmc = ajmc.tolist()
+
+                missile_info += ajmc
                 missile_info += [missile.flying,missile.detonated]
             feature += missile_info
     
+    #print(feature)
     return feature
 
 class Jet:
     
     BXYZ=[-5.5,4.5,0,7,-5.5,4.5]
     
-    def auto_input(dpitch, droll, dyaw, dthrottle, fire):
-        self.droll     = sign(droll)
+    def auto_input(self,in_):
+        dpitch, dyaw, droll, dthrottle, fire = in_
         self.dpitch    = sign(dpitch)
         self.dyaw      = sign(dyaw)
+        self.droll     = sign(droll)
         self.dthrottle = sign(dthrottle)
-        if(fire):
+        if(sign(fire) > 0):
             self.fire_missile()
     
     def keydown_gen(self,keys):
@@ -558,13 +732,26 @@ if __name__ == "__main__":
     
     all_jets = [jet1,jet2]
     
-    model1 = None
-    model2 = None
+    model1 = Net()
+    m1_mem = []
+    model2 = Net()
+    m2_mem = []
     all_models = [model1, model2]
+    all_memory = [m1_mem, m2_mem]
+    
+    import torch.optim as optim
+    criterion = nn.MSELoss()
+    optimizer1 = optim.SGD(model1.parameters(), lr=0.001, momentum=0.9)
+    optimizer2 = optim.SGD(model2.parameters(), lr=0.001, momentum=0.9)
+    all_opts=[optimizer1,optimizer2]
+    
+    
+    cur_step = 0
     
     canv.grid()
 
-    
+    halt_sema = 1
+    held = [MAX_STEPS for _ in range(len(all_jets))]
 
 
     draw_loop()
