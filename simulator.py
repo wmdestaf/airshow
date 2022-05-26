@@ -60,9 +60,12 @@ def scale(a, b, s):
     return [bb + ddiff for bb, ddiff in zip(b, diff)]
 
 def draw_loop():
-    jet.position_step_integration()
-    jet.check_bounds()
-    jet.graphical_step_iteration()
+    global all_jets
+    
+    for jet in all_jets:
+        jet.position_step_integration()
+        jet.check_bounds()
+        jet.graphical_step_iteration()
     canv.after(10,draw_loop)
 
 def sign(x):
@@ -71,12 +74,91 @@ def sign(x):
 TIME_STEP = 0.001
 SCALE_CS  = 0.1
 
+class Missile:
+    def __init__(self, jet, other_jets,speed=100):
+        self.flying    = 0
+        self.detonated = 0
+        self.jet = jet
+        self.other_jets = other_jets
+        self.radius = 0.1
+        self.dot = canv.create_oval(0,0,0,0,outline='yellow')
+        self.speed = speed
+    
+    def launch(self):
+        self.flying = 1
+        self.direc = normalize(np.array(self.jet.offs[3]) - self.jet.centroid)
+        self.centroid = deepcopy(self.jet.centroid)
+    
+    def time_step(self):
+        if not self.flying and not self.detonated: #attached to hardpoint
+            self.centroid = deepcopy(self.jet.centroid)
+        elif self.flying: #trying to find target
+            self.centroid += self.direc * self.speed * TIME_STEP * SCALE_CS
+            
+            #pretty colors....woww
+            new = 'blue' if self.jet.canv.itemcget(self.dot,'outline') == 'red' else 'red'
+            self.jet.canv.itemconfig(self.dot,outline=new)
+            
+            #should we go boom?
+            #first, have we hit boundary?
+            if self.centroid[0][0] < -1.5:
+                self.explode()
+            elif self.centroid[0][0] > 1.0:
+                self.explode()
+            elif self.centroid[0][1] < 0.0:
+                self.explode()
+            elif self.centroid[0][1] > sqrt(2):
+                self.explode()
+            elif self.centroid[0][2] < -1.5:
+                self.explode()
+            elif self.centroid[0][2] > 1.5:
+                self.explode()
+
+            #otherwise, have we hit a jet?
+            for jet in self.other_jets:
+                diff = np.linalg.norm(self.centroid - jet.centroid)
+                if diff < self.radius:
+                    self.explode()
+                #print(diff)
+            
+
+        ss = to_ss(self.centroid)
+        self.jet.canv.coords(self.dot, ss[0]-5, ss[1]-5,
+                                       ss[0]+5, ss[1]+5)
+
+
+    def reset(self):
+        self.flying    = 0
+        self.detonated = 0
+        self.jet.canv.itemconfig(self.dot,outline='yellow')
+
+    def explode(self):
+        self.flying = 0
+        self.detonated = 1
+        self.jet.canv.itemconfig(self.dot,outline='white')
+        
+        for jet in self.other_jets:
+            if np.linalg.norm(self.centroid - jet.centroid) < self.radius:
+                reset_simulator(self.jet,jet)
+
+def reset_simulator(winner, failer):
+    global all_jets
+    
+    for idx, jet in enumerate(all_jets):
+        jet.reset()
+        if jet == winner:
+            print("Jet %d won!" % idx)
+        if jet == failer and winner == None:
+            print("Jet %d crashed (unforced error)" % idx)
+        elif jet == failer:
+            print("Jet %d shot down by %d!" % (idx, all_jets.index(winner)))
+
 class Jet:
     
     def keydown_gen(self,keys):
         def keydown(e):
             nonlocal self
-        
+
             if e.char == keys[0]:
                 self.droll = -1
             elif e.char == keys[1]: 
@@ -93,6 +175,8 @@ class Jet:
                 self.dthrottle = -1
             elif e.char == keys[7]:
                 self.dthrottle = 1
+            elif e.char == keys[8]:
+                self.fire_missile()
         return keydown
 
     def keyup_gen(self,keys):
@@ -119,32 +203,37 @@ class Jet:
 
     def check_bounds(self):
         #hit a wall?
-        return
+        #return
         
-        if self.centroid[0][0] < -0.5:
+        if self.centroid[0][0] < -1.5:
             print("Hit -X")
-            self.reset()
+            reset_simulator(None,self)
         elif self.centroid[0][0] > 1.0:
             print("Hit +X")
-            self.reset()
+            reset_simulator(None,self)
         elif self.centroid[0][1] < 0.0:
             print("Hit -Y")
-            self.reset()
+            reset_simulator(None,self)
         elif self.centroid[0][1] > sqrt(2):
             print("Hit +Y")
-            self.reset()
-        elif self.centroid[0][2] < -0.5:
+            reset_simulator(None,self)
+        elif self.centroid[0][2] < -1.5:
             print("Hit -Z")
-            self.reset()
-        elif self.centroid[0][2] > 1.0:
+            reset_simulator(None,self)
+        elif self.centroid[0][2] > 1.5:
             print("Hit +Z")
-            self.reset()
+            reset_simulator(None,self)
+
+    def fire_missile(self):
+        if self.missiles[self.cur_missile_ptr]:
+            self.missiles[self.cur_missile_ptr].launch()
+            self.cur_missile_ptr+=1
 
     def reset(self):
         self.centroid = np.array([deepcopy(self.centroid_b)])
-        self.pitch=0
-        self.roll=0
-        self.yaw=0
+        self.pitch=self.cond[0]
+        self.roll=self.cond[1]
+        self.yaw=self.cond[2]
         self.throttle=100
         self.velocity=np.array([0.,0.,0.])
         self.force=np.array([0.,0.,0.])
@@ -154,6 +243,11 @@ class Jet:
         for i in range(len(self.offs)): #rotate about initial configuration
             self.offs[i] = scale(self.offs[i],list(self.centroid[0]),self.scale_factor)
             self.offs[i] = rotate_about(self.offs[i],self.centroid,self.pitch,self.yaw,self.roll)
+    
+        for missile in self.missiles:
+            if missile:
+                missile.reset()
+        self.cur_missile_ptr = 0
 
     def position_step_integration(self):
         #adjust orientation
@@ -187,9 +281,9 @@ class Jet:
         up    = normalize(np.array(self.offs[4]) - self.offs[0])
         
         #weight = mass * gravity
-        Fw = 17960 * 9.818 * 0.001 #w h y
+        Fw = 17960 * 9.818 #* 0.001 #w h y
         #lerp thrust from our 0-100 slider
-        Ft = 700000 * (self.throttle / (MAX_THROTTLE - MIN_THROTTLE))
+        Ft = 1400000 * (self.throttle / (MAX_THROTTLE - MIN_THROTTLE))
         
         #lift + drag force(s) are more complicated...
         v_scalar = np.linalg.norm(self.velocity)
@@ -242,9 +336,14 @@ class Jet:
             #self.offs[i] += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
             self.offs[i] += TIME_STEP * self.velocity * SCALE_CS
             self.offs[i] = rotate_about(self.offs[i],self.centroid,self.dpitch,self.dyaw,self.droll)
+        
+        #move missiles
+        for missile in self.missiles:
+            if missile:
+                missile.time_step()
 
     def graphical_step_iteration(self):
-        ss2 = to_ss(jet.centroid)
+        ss2 = to_ss(self.centroid)
         #print(ss2)
         
         if self.display_dots:
@@ -263,16 +362,21 @@ class Jet:
     
         self.canv.coords(self.plane_lines[5],to_ss(self.offs[0])+to_ss(self.offs[4])) #tailfin to centroid
 
-    def __init__(self, root, canv, keys, centroid_b, offs_b,scale_factor=0.5,display_dots=True):
+    def __init__(self, root, canv, keys, centroid_b, orient_b,
+                 offs_b,start_velocity,kd_dispatcher,kr_dispatcher,
+                 scale_factor=0.5,display_dots=True):
         
         self.root=root
         self.canv=canv
         
-        self.root.bind("<KeyPress>",   self.keydown_gen(keys))
-        self.root.bind("<KeyRelease>", self.keyup_gen(keys))
-        self.pitch=0
-        self.roll=0
-        self.yaw=0
+        kd_dispatcher.append(self.keydown_gen(keys))
+        kr_dispatcher.append(self.keyup_gen(keys))
+        
+        self.cond = deepcopy(orient_b)
+        
+        self.pitch=self.cond[0]
+        self.roll=self.cond[1]
+        self.yaw=self.cond[2]
         self.throttle=100
 
         self.dpitch=0
@@ -280,7 +384,7 @@ class Jet:
         self.droll=0
         self.dthrottle=0
         
-        self.velocity=np.array([0.0,0.0,0.0])
+        self.velocity=np.array(start_velocity)
         self.force=np.array([0.0,0.0,0.0])
         
         self.centroid_b = centroid_b
@@ -312,6 +416,16 @@ class Jet:
             canv.create_line(0,0,0,0,fill='white'),
             canv.create_line(0,0,0,0,fill='white')
         ]
+        
+    def bind_opponents(self, others):
+        #missiles!
+        self.missiles = [Missile(self,others) for _ in range(4)]
+        self.missiles.append(None) #terminator
+        self.cur_missile_ptr = 0
+    
+def dispatch(e, dispatcher):
+    for f in dispatcher: #there HAS to be a better way to do this...
+        f(e)
     
 if __name__ == "__main__":
     root = tk.Tk()
@@ -328,8 +442,13 @@ if __name__ == "__main__":
         grid_points[0]+grid_points[1]+grid_points[2]+grid_points[3],
     fill='green')
     
-    keys = ['a','d','s','w','j','l','k','i']
-    centroid_b = [0.5,1.0,0.5]
+    keys1 = ['a','d','s','w','q','e','1','3','2']
+    keys2 = ['j','l','k','i','u','o','7','9','8']
+    
+    centroid_b = [0.5,1.0,0.4]
+    orient_b = [0,90,0]
+    centroid_c = [0.5,1.0,0.6]
+    orient_c = [0,-90,0]
     offs_b = [
         [0.5,1.0,0.7], #main points
         [0.6,1.0,0.5],
@@ -337,7 +456,25 @@ if __name__ == "__main__":
         [0.5,1.0,0.2],
         [0.5,1.1,0.7]
     ]
-    jet = Jet(root,canv,keys,centroid_b, offs_b, scale_factor=0.4, display_dots=True)
+    
+    kr_dispatcher = []
+    kd_dispatcher = []
+    root.bind("<KeyPress>",   lambda e: dispatch(e,kd_dispatcher))
+    root.bind("<KeyRelease>", lambda e: dispatch(e,kr_dispatcher))
+    
+    jet1 = Jet(root,canv,keys1, centroid_b, orient_b, offs_b, 
+    [0,0,0.1],
+    kd_dispatcher,kr_dispatcher,scale_factor=0.4, display_dots=False)
+    
+    
+    jet2 = Jet(root,canv,keys2,centroid_c, orient_c, offs_b, 
+    [0,0,-0.1],
+    kd_dispatcher,kr_dispatcher,scale_factor=0.4, display_dots=False)
+    
+    jet1.bind_opponents([jet2])
+    jet2.bind_opponents([jet1])
+    
+    all_jets = [jet1,jet2]
     canv.grid()
 
     
