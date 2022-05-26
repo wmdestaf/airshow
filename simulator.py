@@ -60,12 +60,16 @@ def scale(a, b, s):
     return [bb + ddiff for bb, ddiff in zip(b, diff)]
 
 def draw_loop():
-    global all_jets
+    global all_jets, all_models
     
-    for jet in all_jets:
+    for jet , model in zip(all_jets, all_models):
+        #TODO: fire model and move jet with output
+        
         jet.position_step_integration()
         jet.check_bounds()
         jet.graphical_step_iteration()
+        
+    state_to_future_array_from_jet(all_jets[0])
     canv.after(10,draw_loop)
 
 def sign(x):
@@ -141,21 +145,86 @@ class Missile:
 def reset_simulator(winner, failer):
     global all_jets
     
+    res_net = [0 for _ in range(len(all_jets))]
+    
     for idx, jet in enumerate(all_jets):
         jet.reset()
         if jet == winner:
             print("Jet %d won!" % idx)
+            res_net[idx] = 2
         if jet == failer and winner == None:
             print("Jet %d crashed (unforced error)" % idx)
+            res_net[idx] = -1
         elif jet == failer:
-            print("Jet %d shot down! (by %d)!" % (idx, all_jets.index(winner)))
+            print("Jet %d shot down! (by %d)!" % (idx, 
+            all_jets.index(winner))) #expand to N jets, refactor this
+            res_net[idx] = -2
+
+    print(res_net)
+
+    global all_models
+    for jet, model in zip(all_jets, all_models):
+        #todo: apply reward to models
+        pass
 
 TIME_STEP = 0.001
 SCALE_CS  = 0.5
+N_MISSILES = 4
+
+#input data
+#for every jet: 4 orientation, 
+
+def state_to_future_array_from_jet(jet):
+    global all_jets
+
+    #first, spit out our orientation, and throttle
+
+    feature = [
+        np.asarray(jet.centroid)[0][0],
+        np.asarray(jet.centroid)[0][1],
+        np.asarray(jet.centroid)[0][2],
+        jet.pitch, jet.yaw, jet.roll, jet.throttle
+    ]
+
+    #now, our missiles
+    missile_info = []
+    for missile in jet.missiles:
+        if missile:
+            missile_info += (list(np.asarray(missile.centroid)[0]))
+            missile_info += [missile.flying,missile.detonated]
+    feature += missile_info
+    
+    #now, everyone else and 'their' missiles
+    for jet2 in all_jets:
+        if jet2 == jet:
+            continue
+        feature += [
+            np.asarray(jet2.centroid)[0][0],
+            np.asarray(jet2.centroid)[0][1],
+            np.asarray(jet2.centroid)[0][2],
+            jet2.pitch, jet2.yaw, jet2.roll,jet2.throttle
+        ]
+
+        for missile in jet2.missiles:
+            missile_info = deepcopy([])
+            if missile:
+                missile_info += np.asarray(missile.centroid)[0].tolist()
+                missile_info += [missile.flying,missile.detonated]
+            feature += missile_info
+    
+    return feature
 
 class Jet:
     
     BXYZ=[-5.5,4.5,0,7,-5.5,4.5]
+    
+    def auto_input(dpitch, droll, dyaw, dthrottle, fire):
+        self.droll     = sign(droll)
+        self.dpitch    = sign(dpitch)
+        self.dyaw      = sign(dyaw)
+        self.dthrottle = sign(dthrottle)
+        if(fire):
+            self.fire_missile()
     
     def keydown_gen(self,keys):
         def keydown(e):
@@ -364,6 +433,14 @@ class Jet:
     
         self.canv.coords(self.plane_lines[5],to_ss(self.offs[0])+to_ss(self.offs[4])) #tailfin to centroid
 
+        #move the missile display text
+        canv.coords(self.missile_text,ss2[0],ss2[1] - 25)
+        canv.itemconfig(self.missile_text,text=str(N_MISSILES - self.cur_missile_ptr))
+        if self.cur_missile_ptr == N_MISSILES:
+            canv.itemconfig(self.missile_text,fill='red')
+        else:
+            canv.itemconfig(self.missile_text,fill='cyan')
+
     def __init__(self, root, canv, keys, centroid_b, orient_b,
                  offs_b,start_velocity,kd_dispatcher,kr_dispatcher,
                  scale_factor=0.5,display_dots=True):
@@ -420,9 +497,11 @@ class Jet:
             canv.create_line(0,0,0,0,fill='white')
         ]
         
+        self.missile_text = canv.create_text(0,0,fill='pink',text=str(N_MISSILES))
+        
     def bind_opponents(self, others):
         #missiles!
-        self.missiles = [Missile(self,others) for _ in range(4)]
+        self.missiles = [Missile(self,others) for _ in range(N_MISSILES)]
         self.missiles.append(None) #terminator
         self.cur_missile_ptr = 0
     
@@ -478,6 +557,11 @@ if __name__ == "__main__":
     jet2.bind_opponents([jet1])
     
     all_jets = [jet1,jet2]
+    
+    model1 = None
+    model2 = None
+    all_models = [model1, model2]
+    
     canv.grid()
 
     
