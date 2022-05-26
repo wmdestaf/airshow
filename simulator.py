@@ -18,7 +18,7 @@ def CLAMP(x,lower,upper):
     return min(upper,max(x,lower))
 
 def to_ss(vec3):
-    ss = (ortho * np.reshape(vec3,(-1,1)))[:2]
+    ss =  (ortho * SCALE_CS * np.reshape(vec3,(-1,1)))[:2]
     ss[0] *= (width >> 1)
     ss[1] *= (height >> 1)
     return [int(ss[0]) + (width >> 1), height - (int(ss[1]) + (height >> 3))]
@@ -71,9 +71,6 @@ def draw_loop():
 def sign(x):
     return -1 if x < 0 else 1
 
-TIME_STEP = 0.001
-SCALE_CS  = 0.1
-
 class Missile:
     def __init__(self, jet, other_jets,speed=100):
         self.flying    = 0
@@ -93,7 +90,7 @@ class Missile:
         if not self.flying and not self.detonated: #attached to hardpoint
             self.centroid = deepcopy(self.jet.centroid)
         elif self.flying: #trying to find target
-            self.centroid += self.direc * self.speed * TIME_STEP * SCALE_CS
+            self.centroid += self.direc * self.speed * TIME_STEP
             
             #pretty colors....woww
             new = 'blue' if self.jet.canv.itemcget(self.dot,'outline') == 'red' else 'red'
@@ -101,17 +98,17 @@ class Missile:
             
             #should we go boom?
             #first, have we hit boundary?
-            if self.centroid[0][0] < -1.5:
+            if self.centroid[0][0] < Jet.BXYZ[0]:
                 self.explode()
-            elif self.centroid[0][0] > 1.0:
+            elif self.centroid[0][0] > Jet.BXYZ[1]:
                 self.explode()
-            elif self.centroid[0][1] < 0.0:
+            elif self.centroid[0][1] < Jet.BXYZ[2]:
                 self.explode()
-            elif self.centroid[0][1] > sqrt(2):
+            elif self.centroid[0][1] > Jet.BXYZ[3]:
                 self.explode()
-            elif self.centroid[0][2] < -1.5:
+            elif self.centroid[0][2] < Jet.BXYZ[4]:
                 self.explode()
-            elif self.centroid[0][2] > 1.5:
+            elif self.centroid[0][2] > Jet.BXYZ[5]:
                 self.explode()
 
             #otherwise, have we hit a jet?
@@ -151,9 +148,14 @@ def reset_simulator(winner, failer):
         if jet == failer and winner == None:
             print("Jet %d crashed (unforced error)" % idx)
         elif jet == failer:
-            print("Jet %d shot down by %d!" % (idx, all_jets.index(winner)))
+            print("Jet %d shot down! (by %d)!" % (idx, all_jets.index(winner)))
+
+TIME_STEP = 0.001
+SCALE_CS  = 0.5
 
 class Jet:
+    
+    BXYZ=[-5.5,4.5,0,7,-5.5,4.5]
     
     def keydown_gen(self,keys):
         def keydown(e):
@@ -205,22 +207,22 @@ class Jet:
         #hit a wall?
         #return
         
-        if self.centroid[0][0] < -1.5:
+        if self.centroid[0][0] < Jet.BXYZ[0]:
             print("Hit -X")
             reset_simulator(None,self)
-        elif self.centroid[0][0] > 1.0:
+        elif self.centroid[0][0] > Jet.BXYZ[1]:
             print("Hit +X")
             reset_simulator(None,self)
-        elif self.centroid[0][1] < 0.0:
+        elif self.centroid[0][1] < Jet.BXYZ[2]:
             print("Hit -Y")
             reset_simulator(None,self)
-        elif self.centroid[0][1] > sqrt(2):
+        elif self.centroid[0][1] > Jet.BXYZ[3]:
             print("Hit +Y")
             reset_simulator(None,self)
-        elif self.centroid[0][2] < -1.5:
+        elif self.centroid[0][2] < Jet.BXYZ[4]:
             print("Hit -Z")
             reset_simulator(None,self)
-        elif self.centroid[0][2] > 1.5:
+        elif self.centroid[0][2] > Jet.BXYZ[5]:
             print("Hit +Z")
             reset_simulator(None,self)
 
@@ -235,7 +237,7 @@ class Jet:
         self.roll=self.cond[1]
         self.yaw=self.cond[2]
         self.throttle=100
-        self.velocity=np.array([0.,0.,0.])
+        self.velocity=deepcopy(self.start_velocity)
         self.force=np.array([0.,0.,0.])
         
         self.offs = deepcopy(offs_b)
@@ -318,7 +320,7 @@ class Jet:
         
         self.force = np.array([Fx,Fy,Fz])
         self.velocity += TIME_STEP * self.force * (1. / 17690.) #leapfrog 1: f/m = a
-        self.centroid += TIME_STEP * self.velocity * SCALE_CS #leapfrog 2
+        self.centroid += TIME_STEP * self.velocity #leapfrog 2
         self.centroid = np.asarray(np.asmatrix(self.centroid))
         #print(self.centroid)
         
@@ -334,7 +336,7 @@ class Jet:
         #move surrounding jet 'points' in worldspace
         for i in range(len(self.offs)):
             #self.offs[i] += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
-            self.offs[i] += TIME_STEP * self.velocity * SCALE_CS
+            self.offs[i] += TIME_STEP * self.velocity
             self.offs[i] = rotate_about(self.offs[i],self.centroid,self.dpitch,self.dyaw,self.droll)
         
         #move missiles
@@ -384,7 +386,8 @@ class Jet:
         self.droll=0
         self.dthrottle=0
         
-        self.velocity=np.array(start_velocity)
+        self.start_velocity=np.array(start_velocity)
+        self.velocity=deepcopy(start_velocity)
         self.force=np.array([0.0,0.0,0.0])
         
         self.centroid_b = centroid_b
@@ -445,16 +448,16 @@ if __name__ == "__main__":
     keys1 = ['a','d','s','w','q','e','1','3','2']
     keys2 = ['j','l','k','i','u','o','7','9','8']
     
-    centroid_b = [0.5,1.0,0.4]
+    centroid_b = [0.5,2.5,0.4]
     orient_b = [0,90,0]
-    centroid_c = [0.5,1.0,0.6]
+    centroid_c = [0.5,2.5,0.6]
     orient_c = [0,-90,0]
     offs_b = [
-        [0.5,1.0,0.7], #main points
-        [0.6,1.0,0.5],
-        [0.4,1.0,0.5],
-        [0.5,1.0,0.2],
-        [0.5,1.1,0.7]
+        [0.5,2.5,0.7], #main points
+        [0.6,2.5,0.5],
+        [0.4,2.5,0.5],
+        [0.5,2.5,0.2],
+        [0.5,2.6,0.7]
     ]
     
     kr_dispatcher = []
@@ -463,12 +466,12 @@ if __name__ == "__main__":
     root.bind("<KeyRelease>", lambda e: dispatch(e,kr_dispatcher))
     
     jet1 = Jet(root,canv,keys1, centroid_b, orient_b, offs_b, 
-    [0,0,0.1],
+    [0.01,0.0,0.0],
     kd_dispatcher,kr_dispatcher,scale_factor=0.4, display_dots=False)
     
     
     jet2 = Jet(root,canv,keys2,centroid_c, orient_c, offs_b, 
-    [0,0,-0.1],
+    [0.01,0.0,0.0],
     kd_dispatcher,kr_dispatcher,scale_factor=0.4, display_dots=False)
     
     jet1.bind_opponents([jet2])
