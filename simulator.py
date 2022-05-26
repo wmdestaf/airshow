@@ -1,7 +1,8 @@
 import tkinter as tk
 import numpy as np
-from math import radians, cos, sin, asin, pi, exp, sqrt, inf
+from math import degrees, radians, cos, acos, sin, asin, pi, exp, sqrt, inf
 from copy import deepcopy
+from time import time
 
 width=1000
 height=700
@@ -64,6 +65,12 @@ def draw_loop():
     jet.graphical_step_iteration()
     canv.after(10,draw_loop)
 
+def sign(x):
+    return -1 if x < 0 else 1
+
+TIME_STEP = 0.001
+SCALE_CS  = 0.1
+
 class Jet:
     
     def keydown_gen(self,keys):
@@ -112,6 +119,8 @@ class Jet:
 
     def check_bounds(self):
         #hit a wall?
+        return
+        
         if self.centroid[0][0] < -0.5:
             print("Hit -X")
             self.reset()
@@ -136,7 +145,9 @@ class Jet:
         self.pitch=0
         self.roll=0
         self.yaw=0
-        self.throttle=50
+        self.throttle=100
+        self.velocity=np.array([0.,0.,0.])
+        self.force=np.array([0.,0.,0.])
         
         self.offs = deepcopy(offs_b)
 
@@ -151,18 +162,90 @@ class Jet:
         self.roll  = (self.roll  + self.droll)  % 360
         self.throttle = CLAMP(self.throttle + self.dthrottle, 0, 100)
         
-        #move center in worldspace
+        #FLIGHT DYNAMICS BEGIN HERE
+        
+        '''
+        Constants we KNOW:
+            w = 39000lb ~ 17690 kg
+            max_thrust = 32000 ft/lbs ~ 140,000 N with afterburner
+            g = -9.81 m/s/s
+            wing area = 49.2 m^2
+            air density = 1.2754 kg/m^3
+            
+            Cd0=0.025
+            dCd=0.3 1/radians
+            Cl0=0.1
+            dCl=3.75 1/radians
+            
+            Mach 1 = 373 m/s
+            kinematic viscocity of air = 1.460×10−5 m^2/s
+            mean chord length ~ chord length = 4.8768m
+        '''
+        
+        #orientation direction, lift direction
         direc = normalize(np.array(self.offs[3]) - self.centroid)
-        jet.centroid += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
+        up    = normalize(np.array(self.offs[4]) - self.offs[0])
+        
+        #weight = mass * gravity
+        Fw = 17960 * 9.818 * 0.001 #w h y
+        #lerp thrust from our 0-100 slider
+        Ft = 700000 * (self.throttle / (MAX_THROTTLE - MIN_THROTTLE))
+        
+        #lift + drag force(s) are more complicated...
+        v_scalar = np.linalg.norm(self.velocity)
+        Mach = v_scalar / 373
+        Reynolds = (v_scalar * 4.8768) / 0.0000146
+        
+        #angle of attack = velocity vs direction
+        up = np.asarray(up) #why is this so
+        angle_attack = acos(normalize(self.velocity).dot(direc[0])) * sign(direc[0][1])
+        
+        #lift coefficient = Cl0 + dCl * aa
+        Cl = 0.1 + angle_attack * 3.75 #linear approx
+        if degrees(angle_attack) > 22.5: #stall
+            Cl = 0 #!!!!!
+        
+        #lift force = lift coefficient * air density * v^2 * A * 0.5
+        Fl = Cl * 0.5 * (v_scalar ** 2) * 49.2 * 0.5
+        
+        
+        #derag coefficient = Cd0 + dCd * aa
+        Cd = 0.025 + angle_attack * 0.3
+        
+        #drag force, same as lift force, only with drag coefficient
+        Fd = Cd * 0.5 * (np.linalg.norm(self.velocity) ** 2) * 49.2 * 0.5
+        
+        #FLIGHT DYNAMICS END HERE
+        
+        #sum of the forces equals zero, yadda yadda yadda....
+        Fx= (up[0][0] * Fl) + (direc[0][0] * Ft) - (direc[0][0] * Fd)
+        Fy= (up[0][1] * Fl) + (direc[0][1] * Ft) - (direc[0][1] * Fd) - (Fw)
+        Fz= (up[0][2] * Fl) + (direc[0][2] * Ft) - (direc[0][2] * Fd)
+        
+        self.force = np.array([Fx,Fy,Fz])
+        self.velocity += TIME_STEP * self.force * (1. / 17690.) #leapfrog 1: f/m = a
+        self.centroid += TIME_STEP * self.velocity * SCALE_CS #leapfrog 2
+        self.centroid = np.asarray(np.asmatrix(self.centroid))
+        #print(self.centroid)
+        
+        #print(up,direc)#Fl, Fw, self.force)#, self.force, self.velocity)
+        #print(self.force, Fw, Fl, self.velocity, self.centroid)
+        
+        #exit(1)
+
+        #move center in worldspace
+        
+        #self.centroid += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
         
         #move surrounding jet 'points' in worldspace
-        
         for i in range(len(self.offs)):
-            self.offs[i] += direc * 0.00004 * CLAMP(jet.throttle - 50,0,inf)
+            #self.offs[i] += direc * 0.00004 * CLAMP(self.throttle - 50,0,inf)
+            self.offs[i] += TIME_STEP * self.velocity * SCALE_CS
             self.offs[i] = rotate_about(self.offs[i],self.centroid,self.dpitch,self.dyaw,self.droll)
 
     def graphical_step_iteration(self):
         ss2 = to_ss(jet.centroid)
+        #print(ss2)
         
         if self.display_dots:
             self.canv.coords(self.centroid_dot,ss2[0]-5,ss2[1]-5,ss2[0]+5,ss2[1]+5)
@@ -190,12 +273,15 @@ class Jet:
         self.pitch=0
         self.roll=0
         self.yaw=0
-        self.throttle=50
+        self.throttle=100
 
         self.dpitch=0
         self.dyaw=0
         self.droll=0
         self.dthrottle=0
+        
+        self.velocity=np.array([0.0,0.0,0.0])
+        self.force=np.array([0.0,0.0,0.0])
         
         self.centroid_b = centroid_b
         self.centroid = deepcopy(self.centroid_b)
