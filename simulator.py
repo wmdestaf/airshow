@@ -741,7 +741,7 @@ if __name__ == "__main__":
     #add automatic trigger
     menubar = tk.Menu(root)
     configmenu = tk.Menu(menubar, tearoff=0)
-    configmenu.add_command(label='Toggle Auto 1',command=lambda: set_automatic(1))
+    configmenu.add_command(label='Toggle Auto 1',command=lambda: set_automatic(0))
     configmenu.add_command(label='Toggle Auto 2',command=lambda: set_automatic(1))
 
     menubar.add_cascade(label="Menu", menu=configmenu)
