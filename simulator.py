@@ -328,11 +328,11 @@ N_MISSILES = 4
 
 #input layer
 #for every jet: 4 orientation, (p,y,r,t), 3 centroid (x,y,z), N_MISSILES missiles 
-#for every missile: 1 flying, 1 detonated 3 centroid (x,y,z)
+#for every missile: 1 flying, 1 detonated, 1 fuel, 3 centroid (x,y,z)
 #
-#total inputs: N_JETS * ( (4 + 3) + ((1 + 1 + 3) * N_MISSILES))
-#              N_JETS * ( 7 + 5 * N_MISSILES)
-#              7*N_JETS + 5 * N_JETS * N_MISSILES
+#total inputs: N_JETS * ( (4 + 3) + ((1 + 1 + 1 + 3) * N_MISSILES))
+#              N_JETS * ( 7 + 6 * N_MISSILES)
+#              7*N_JETS + 6 * N_JETS * N_MISSILES
 #
 #output layer
 #
@@ -340,10 +340,10 @@ N_MISSILES = 4
 #2^5 = 32 outputs. LSB=fire / not fire, 2LSB=incease / decrease thrust, etc...
 #
 #
-#in our case, N_JETS=2, N_MISSILES=4. So, go from 54 inputs to 32 outputs. How should we do so?
+#in our case, N_JETS=2, N_MISSILES=4. So, go from 62 inputs to 32 outputs. How should we do so?
 #
 #Let's make 9 layers.
-#54->54->54->43->43->43->32->32->32
+#62->62->52->52->52->42->42->32->32
 #
 import torch.nn as nn
 import torch.nn.functional as F
@@ -351,13 +351,13 @@ import torch.nn.functional as F
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(54,54)
-        self.fc2 = nn.Linear(54,54)
-        self.fc3 = nn.Linear(54,43)
-        self.fc4 = nn.Linear(43,43)
-        self.fc5 = nn.Linear(43,43)
-        self.fc6 = nn.Linear(43,32)
-        self.fc7 = nn.Linear(32,32)
+        self.fc1 = nn.Linear(62,62)
+        self.fc2 = nn.Linear(62,52)
+        self.fc3 = nn.Linear(52,52)
+        self.fc4 = nn.Linear(52,52)
+        self.fc5 = nn.Linear(52,42)
+        self.fc6 = nn.Linear(42,42)
+        self.fc7 = nn.Linear(42,32)
         self.fc8 = nn.Linear(32,32)
         self.fc9 = nn.Linear(32,32)
 
@@ -398,7 +398,7 @@ def state_to_future_array_from_jet(jet):
                 ajmc = ajmc[0]
                 ajmc = ajmc.tolist()
             missile_info += ajmc
-            missile_info += [missile.flying,missile.detonated]
+            missile_info += [missile.flying,missile.detonated,missile.fuel]
     feature += missile_info
     
     #now, everyone else and 'their' missiles
@@ -426,7 +426,7 @@ def state_to_future_array_from_jet(jet):
                     ajmc = ajmc.tolist()
 
                 missile_info += ajmc
-                missile_info += [missile.flying,missile.detonated]
+                missile_info += [missile.flying,missile.detonated,missile.fuel]
             feature += missile_info
     
     #print(feature)
