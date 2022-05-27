@@ -12,7 +12,7 @@ height=700
 MAX_THROTTLE = 100
 MIN_THROTTLE = 0
 
-GAMMA=0.999 #we are invested in the future
+GAMMA=0.75 #we are invested in the future
 
 ortho = (1.0 /sqrt(6)) * np.matrix([[sqrt(3),0,-sqrt(3)],
                                    [1,2,1],
@@ -75,9 +75,10 @@ def draw_loop():
         
     
     #movememt
-    for jet, memory, model in zip(all_jets, all_memory, all_models):
-        #TODO: fire model and move jet with output
-        
+    for jet, memory, model, auto in zip(all_jets, all_memory, all_models, all_automatic):
+        if not auto:
+            continue
+            
         #decide what the hell we're doing
         with torch.no_grad():
             raw = state_to_future_array_from_jet(jet)
@@ -88,7 +89,7 @@ def draw_loop():
             out = model(data)
             
             choice = -1
-            if random() > 0.05:  #likely, make best one (max)
+            if random() > 0.20:  #likely, make best one (max)
                 max_ = -inf
                 maxi = -1
                 
@@ -143,9 +144,10 @@ def sign(x):
     return -1 if x < 0 else 1
 
 class Missile:
-    def __init__(self, jet, other_jets,speed=100):
+    def __init__(self, jet, other_jets,speed=50):
         self.flying    = 0
         self.detonated = 0
+        self.fuel = 350
         self.jet = jet
         self.other_jets = other_jets
         self.radius = 0.15
@@ -162,6 +164,24 @@ class Missile:
         if not self.flying and not self.detonated: #attached to hardpoint
             self.centroid = deepcopy(self.jet.centroid)
         elif self.flying: #trying to find target
+        
+            closest_ctr = np.array([999,999,999])
+            for jet in self.other_jets:
+                s = self.centroid
+                if type(s) == type([]): #LMAO
+                    s = np.array(s)
+            
+                if np.linalg.norm(s - jet.centroid) < np.linalg.norm(s - closest_ctr):
+                    closest_ctr = jet.centroid
+            closest_ctr = closest_ctr[0]        
+
+            #'proportional pursuit'
+            #https://en.wikipedia.org/wiki/Proportional_navigation
+            
+            if self.fuel: #able to 'change' direction
+                self.direc = (0.99 * self.direc) + (0.01 * normalize(jet.centroid - s))
+                self.fuel -= 1
+        
             self.centroid += self.direc * self.speed * TIME_STEP
             
             #pretty colors....woww
@@ -199,6 +219,7 @@ class Missile:
     def reset(self):
         self.flying    = 0
         self.detonated = 0
+        self.fuel = 350
         self.jet.canv.itemconfig(self.dot,outline='yellow')
 
     def explode(self):
@@ -208,11 +229,16 @@ class Missile:
         
         for jet in self.other_jets:
             if np.linalg.norm(self.centroid - jet.centroid) < self.radius:
+                self.centroid = jet.centroid
                 reset_simulator(self.jet,jet)
 
 def reset_simulator(winner, failer):
     global all_jets, cur_step
     global halt_sema #gil makes this trivially simple
+    
+    for jet in all_jets:
+        jet.graphical_step_iteration()
+    canv.update()
     
     halt_sema = 0
     
@@ -224,31 +250,45 @@ def reset_simulator(winner, failer):
         res_net = [-0.5 for _ in range(len(all_jets))]
     
     for idx, jet in enumerate(all_jets):
-        jet.reset()
         if jet == winner:
             print("Jet %d won!" % idx)
             res_net[idx] = 2
+            for line in jet.plane_lines:
+                canv.itemconfig(line, fill='green')
+            
         if jet == failer and winner == None:
             print("Jet %d crashed (unforced error)" % idx)
-            res_net[idx] = -1
+            res_net[idx] = -1.75
+            for line in jet.plane_lines:
+                canv.itemconfig(line, fill='orange')
+            
         elif jet == failer:
             print("Jet %d shot down! (by %d)!" % (idx, 
             all_jets.index(winner))) #expand to N jets, refactor this
             res_net[idx] = -2
+            for line in jet.plane_lines:
+                canv.itemconfig(line, fill='red')
 
+    canv.update()
+
+    '''
     for i in range(len(res_net)): #stayed alive, gain some points
-        global held
+        global held               #took time for a shootdown, exciting (gain points too!)
         len_held = held[i]
         if res_net[i] < 0:
             res_net[i] /= len_held
         else:
             res_net[i] *= len_held
+    '''
     print(res_net)
 
     #return
 
     global all_models
-    for jet, memory, model, rw, optimizer in zip(all_jets, all_memory, all_models, res_net, all_opts):
+    for jet, memory, model, rw, optimizer, auto in zip(all_jets, all_memory, all_models, res_net, all_opts, all_automatic):
+        
+        if not auto: #don't train on human input!
+            continue
         
         inputs = memory
         outputs = [rw * pow(GAMMA,i) for i in range(len(inputs))]
@@ -262,10 +302,8 @@ def reset_simulator(winner, failer):
                 #at such a point, what does the model say?
                 model_res = max(model(input_))
                 #at such a point, what is the discounted reward we got?
-                disc__res = torch.FloatTensor([output_])
-                
-                #print(model_res, disc__res)
-                
+                disc__res = torch.ones(1) * float(output_)
+
                 loss = criterion(model_res, disc__res)
                 loss.backward()
                 optimizer.step()
@@ -274,8 +312,15 @@ def reset_simulator(winner, failer):
         memory.clear()
         
     held = [MAX_STEPS for _ in range(len(all_jets))]
-        
+    
+    for jet in all_jets:
+        jet.reset()
+        for line in jet.plane_lines:
+            canv.itemconfig(line, fill='white')
+    
     halt_sema = 1
+
+    
 
 TIME_STEP = 0.001
 SCALE_CS  = 0.5
@@ -683,11 +728,24 @@ def dispatch(e, dispatcher):
     for f in dispatcher: #there HAS to be a better way to do this...
         f(e)
     
+def set_automatic(i):
+    global all_automatic
+    all_automatic[i] = False if all_automatic[i] else True
+    
 if __name__ == "__main__":
     root = tk.Tk()
     root.geometry('%dx%d' % (width,height) )
     root.title("Airshow")
     root.resizable(False,False)
+    
+    #add automatic trigger
+    menubar = tk.Menu(root)
+    configmenu = tk.Menu(menubar, tearoff=0)
+    configmenu.add_command(label='Toggle Auto 1',command=lambda: set_automatic(1))
+    configmenu.add_command(label='Toggle Auto 2',command=lambda: set_automatic(1))
+
+    menubar.add_cascade(label="Menu", menu=configmenu)
+    root.config(menu=menubar)
     
     canv = tk.Canvas(root, height=height, width=width, bg='black')
     
@@ -731,6 +789,8 @@ if __name__ == "__main__":
     jet2.bind_opponents([jet1])
     
     all_jets = [jet1,jet2]
+    all_automatic = [True, True]
+    #all_automatic = [False, False]
     
     model1 = Net()
     m1_mem = []
